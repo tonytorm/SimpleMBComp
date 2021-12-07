@@ -223,51 +223,38 @@ bool SimpleMbCompAudioProcessor::isBusesLayoutSupported (const BusesLayout& layo
 }
 #endif
 
-void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void SimpleMbCompAudioProcessor::updateState()
 {
-    juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
-
-    
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
-    
-
-//    compressor.process(buffer);
-    
     for (auto& compressor : compressors)
-    {
-        compressor.updateCompressorSettings();
-    }
-    
-    inputGain.setGainDecibels(inputGainParam->get());
-    outputGain.setGainDecibels(outputGainParam->get());
-    
-    applyGain(buffer, inputGain);
-    
-    for (auto& fb : filterBuffers)
-    {
-        fb = buffer;
-    }
-    
+      {
+          compressor.updateCompressorSettings();
+      }
     
     auto lowMidCutoffFreq = lowMidCrossover->get();
-    LP1.setCutoffFrequency(lowMidCutoffFreq);
-    HP1.setCutoffFrequency(lowMidCutoffFreq);
+       LP1.setCutoffFrequency(lowMidCutoffFreq);
+       HP1.setCutoffFrequency(lowMidCutoffFreq);
+       
+       
+       auto midHighCutoffFreq = midHighCrossover->get();
+       AP2.setCutoffFrequency(midHighCutoffFreq);
+       LP2.setCutoffFrequency(midHighCutoffFreq);
+       HP2.setCutoffFrequency(midHighCutoffFreq);
     
+    inputGain.setGainDecibels(inputGainParam->get());
+      outputGain.setGainDecibels(outputGainParam->get());
     
-    auto midHighCutoffFreq = midHighCrossover->get();
-    AP2.setCutoffFrequency(midHighCutoffFreq);
-    LP2.setCutoffFrequency(midHighCutoffFreq);
-    HP2.setCutoffFrequency(midHighCutoffFreq);
-   
+}
+
+void SimpleMbCompAudioProcessor::splitBands(const juce::AudioBuffer<float> &inputBuffer)
+{
+    for (auto& fb : filterBuffers)
+    {
+        fb = inputBuffer;
+    }
     
     auto fb0Block = juce::dsp::AudioBlock<float>(filterBuffers[0]);
     auto fb1Block = juce::dsp::AudioBlock<float>(filterBuffers[1]);
     auto fb2Block = juce::dsp::AudioBlock<float>(filterBuffers[2]);
-    
-   
     
     auto fb0Ctx = juce::dsp::ProcessContextReplacing<float>(fb0Block);
     auto fb1Ctx = juce::dsp::ProcessContextReplacing<float>(fb1Block);
@@ -281,6 +268,24 @@ void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     
     LP2.process(fb1Ctx);
     HP2.process(fb2Ctx);
+}
+
+void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+{
+    juce::ScopedNoDenormals noDenormals;
+    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+
+    
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear (i, 0, buffer.getNumSamples());
+    
+
+    updateState();
+    
+    applyGain(buffer, inputGain);
+    
+    splitBands(buffer);
     
     for (size_t i = 0; i < filterBuffers.size(); i++)
     {
@@ -291,12 +296,7 @@ void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto numSamples = buffer.getNumSamples();
     auto numChannels = buffer.getNumChannels();
     
-    
-
-    
     buffer.clear();
-    
-    
     
     auto addFilterBand = [nc = numChannels, ns = numSamples](auto& inputBuffer, const auto& source)
     {
@@ -306,6 +306,9 @@ void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     };
     
+    
+    
+    //=========================================================== SOLO/MUTE FUNCTIONALITY
     auto bandsAreSoloed = false;
     
     for(auto& comp : compressors)
@@ -341,10 +344,6 @@ void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
     
     applyGain(buffer, outputGain);
-//    addFilterBand(buffer, filterBuffers[0]);
-//    addFilterBand(buffer, filterBuffers[1]);
-//    addFilterBand(buffer, filterBuffers[2]);
-    
 }
 
 //==============================================================================
@@ -402,17 +401,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SimpleMbCompAudioProcessor::
     
     //*************************************************************** THRESHOLD
     
+    auto thresholdRange =  NormalisableRange<float>(-60, 12, 1, 1);
     layout.add(std::make_unique<AudioParameterFloat>(params.at(Names::Threshold_Low_band),
                                                      params.at(Names::Threshold_Low_band),
-                                                     NormalisableRange<float>(-60, 12, 1, 1),
+                                                     thresholdRange,
                                                      0));
     layout.add(std::make_unique<AudioParameterFloat>(params.at(Names::Threshold_Mid_band),
                                                      params.at(Names::Threshold_Mid_band),
-                                                     NormalisableRange<float>(-60, 12, 1, 1),
+                                                     thresholdRange,
                                                      0));
     layout.add(std::make_unique<AudioParameterFloat>(params.at(Names::Threshold_High_band),
                                                      params.at(Names::Threshold_High_band),
-                                                     NormalisableRange<float>(-60, 12, 1, 1),
+                                                     thresholdRange,
                                                      0));
           
     //**************************************************************** ATTACK
@@ -446,8 +446,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SimpleMbCompAudioProcessor::
                                                      params.at(Names::Release_High_Band),
                                                      attackReleaseRange,
                                                      250));
+
     
-    //*************************************************************************************
+    //**************************************************************** RATIO
     
     auto choices = std::vector<double> {1, 1.5, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 50, 100};
     juce::StringArray sa;
@@ -455,9 +456,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout SimpleMbCompAudioProcessor::
     {
         sa.add( String(choice, 1));
     }
-    
-    
-    //**************************************************************** RATIO
     
     layout.add(std::make_unique<AudioParameterChoice>(params.at(Names::Ratio_Low_Band),
                                                       params.at(Names::Ratio_Low_Band),
