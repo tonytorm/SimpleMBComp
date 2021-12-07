@@ -48,9 +48,6 @@ SimpleMbCompAudioProcessor::SimpleMbCompAudioProcessor()
            
        };
     
-    floatHelper(lowMidCrossover, Names::Low_Mid_Crossover_Freq);
-    floatHelper(midHighCrossover, Names::Mid_High_Crossover_Freq);
-    
     floatHelper(lowBandComp.attack, Names::Attack_Low_Band);
     floatHelper(lowBandComp.release, Names::Release_Low_Band);
     floatHelper(lowBandComp.threshold, Names::Threshold_Low_band);
@@ -86,6 +83,12 @@ SimpleMbCompAudioProcessor::SimpleMbCompAudioProcessor()
     
     
     AP2.setType(juce::dsp::LinkwitzRileyFilterType::allpass);
+    
+    floatHelper(lowMidCrossover, Names::Low_Mid_Crossover_Freq);
+    floatHelper(midHighCrossover, Names::Mid_High_Crossover_Freq);
+    
+    floatHelper(inputGainParam, Names::Gain_In);
+    floatHelper(outputGainParam, Names::Gain_Out);
    
 }
 
@@ -176,6 +179,11 @@ void SimpleMbCompAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     LP2.prepare(spec);
     HP2.prepare(spec);
     
+    inputGain.prepare(spec);
+    outputGain.prepare(spec);
+    
+    inputGain.setRampDurationSeconds(0.05);
+    outputGain.setRampDurationSeconds(0.05);
     
     for (auto& buffer : filterBuffers)
     {
@@ -232,6 +240,11 @@ void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     {
         compressor.updateCompressorSettings();
     }
+    
+    inputGain.setGainDecibels(inputGainParam->get());
+    outputGain.setGainDecibels(outputGainParam->get());
+    
+    applyGain(buffer, inputGain);
     
     for (auto& fb : filterBuffers)
     {
@@ -326,6 +339,8 @@ void SimpleMbCompAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             }
         }
     }
+    
+    applyGain(buffer, outputGain);
 //    addFilterBand(buffer, filterBuffers[0]);
 //    addFilterBand(buffer, filterBuffers[1]);
 //    addFilterBand(buffer, filterBuffers[2]);
@@ -369,8 +384,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout SimpleMbCompAudioProcessor::
     
     const auto& params = GetParams();
     auto attackReleaseRange = NormalisableRange<float>(5, 500, 1, 1);
+    auto gainRange = NormalisableRange<float>(-24.f, 24.f, 0.5f, 1);
+
     
     //********************************** COMPRESSORS PARAMETERS
+    //*********************************************************GAIN/OUTPUT
+    
+    layout.add(std::make_unique<AudioParameterFloat>(params.at(Names::Gain_In),
+                                                     params.at(Names::Gain_In),
+                                                     gainRange,
+                                                     0));
+    layout.add(std::make_unique<AudioParameterFloat>(params.at(Names::Gain_Out),
+                                                     params.at(Names::Gain_Out),
+                                                     gainRange,
+                                                     0));
+    
+    
     //*************************************************************** THRESHOLD
     
     layout.add(std::make_unique<AudioParameterFloat>(params.at(Names::Threshold_Low_band),
